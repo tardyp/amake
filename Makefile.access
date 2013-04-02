@@ -1,0 +1,17 @@
+SHELL=/bin/bash
+
+export ACCESS_ENABLE:=1
+export ACCESS_CHKSUM:=1
+
+a:=
+a+=Makefile
+a+=Makefile.in
+a+=aclocal.m4
+a+=config.h
+a+=config.h.in
+a+=config.status
+a+=configure
+a+=stamp-h1
+a+=stamp-po
+a+=make.info
+$(a): ACCESS_ANYCMD:=1

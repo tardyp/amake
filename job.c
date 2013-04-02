@@ -27,6 +27,8 @@ this program.  If not, see <http://www.gnu.org/licenses/>.  */
 #include "variable.h"
 #include "debug.h"
 
+#include "access.h"
+
 #include <string.h>
 
 /* Default shell to use.  */
@@ -846,6 +848,8 @@ reap_children (int block, int err)
             c->file->update_status = 0;
         }
 
+      access_close(c->file);
+
       /* When we get here, all the commands for C->file are finished
          (or aborted) and C->file->update_status contains 0 or 2.  But
          C->file->command_state is still cs_running if all the commands
@@ -1345,6 +1349,8 @@ start_job_command (struct child *child)
             setrlimit (RLIMIT_STACK, &stack_limit);
 #endif
 
+	  access_child(child);
+
 	  child_execute_job (child->good_stdin ? 0 : bad_stdin, 1,
                              argv, child->environment);
 	}
@@ -1558,6 +1564,8 @@ new_job (struct file *file)
   struct child *c;
   char **lines;
   unsigned int i;
+
+  access_open(file);
 
   /* Let any previously decided-upon jobs that are waiting
      for the load to go down start before this new one.  */

@@ -1,0 +1,691 @@
+@node Amake Features, Missing, Features, Top
+@chapter Features of @code{amake}
+@cindex @code{amake}
+@cindex automatic dependency analysis
+
+@menu
+* Usage::                       How to use @code{amake}.
+* Operation::                   How @code{amake} works.
+* Makefile Variables::          How to control @code{amake}.
+* Debugging::                   What to do when things don't work.
+* Execution Architecture::      How @code{amake} is organized.
+* Implementation::              How @code{amake} changes @code{make}.
+* Amake-Collect::               How dependencies are recorded.
+* Target-Cache Subsystem::      How targets are shared.
+@end menu
+
+@code{amake} adds automatic dependency analysis to
+@code{make}. The initial letter in its name abbreviates
+``access,'' because it uses a shared-library named
+@code{libaccess}.
+
+@node Usage, Operation, , Amake Features
+@section Usage
+@cindex @code{libaccess}
+@cindex @code{amake-collect}
+@cindex @code{PATH}
+@cindex @code{LD_LIBRARY_PATH}
+
+While @code{make} is a single executable file,
+@code{amake} has several parts:
+
+@itemize
+@item
+@code{amake} replaces @code{make} as the executable file.
+@item
+@code{amake} preloads a shared-library named @code{libaccess}.
+@item
+@code{amake} executes a customizable script, for each
+target, named @code{amake-collect}.
+@item
+If the target cache is enabled, @code{amake} tries to get
+targets from, and put targets in, the target-cache
+subsystem. This subsystem has three parts: the
+target-cache-daemon (@code{tcd}), the target-index-database
+or SQL-database daemon (@code{tid} or @code{sqld}), and the
+target-cache filesystem.
+
+@end itemize
+
+You will need to be able to execute @code{amake} and
+@code{amake-collect}, and preload @code{libaccess}. This can
+be accomplished in several ways, but the easiest way is to
+assign appropriate values to the environment variables
+@code{PATH} and @code{LD_LIBRARY_PATH}.
+
+In addition, if the target cache is enabled, the
+target-cache subsystem is assumed to be active.
+
+Once you can execute @code{amake}, you can enable its
+features by adding lines to your makefile.
+
+First, add two variable definitions:
+
+@cindex enabling @code{amake} features
+@vindex @code{SHELL}
+@vindex @code{ACCESS_ENABLE}
+
+@example
+@group
+SHELL:=/bin/bash
+ACCESS_ENABLE:=1
+@end group
+@end example
+
+Assigning a value to @code{SHELL}, other than
+@code{/bin/sh}, causes @code{make} to execute commands in a
+subshell, which allows @code{libaccess} to be
+preloaded. Assigning a value to @code{ACCESS_ENABLE} enables
+automatic dependency analysis.
+
+Then, add an @code{sinclude} directive:
+
+@example
+sinclude *.dep
+@end example
+
+Including the generated dependency files causes @code{make}
+to use the previously detected dependencies.
+
+@node Operation, Makefile Variables, Usage, Amake Features
+@section Operation
+@cindex files-accessed dependencies
+@cindex commands-executed dependencies
+@cindex programs-executed dependencies
+@cindex shared-libraries-opened dependencies
+@cindex environment-variable-value dependencies
+
+In order to determine whether a target needs to be updated,
+@code{amake} monitors and records files accessed, commands
+executed, programs executed, shared libraries opened, and
+environment-variable values.  The need for files-accessed
+dependencies should be obvious. Commands-executed
+dependencies eliminate the need for a target to depend on
+its makefile. Programs-executed and shared-libraries-opened
+dependencies are important when tools are being modified.
+Environment-variable-value dependencies are like
+commands-executed dependencies, but are also important when
+a target is built by different users, because such values
+can affect tool execution.
+
+There are several ad-hoc methods of approximating
+files-accessed dependencies @xref{Automatic
+Prerequisites}. For example, source files can be scanned for
+syntactic evidence of access (e.g., @code{#include}
+directives) or a tool can log accessed files (e.g.,
+@code{gcc -MMD}). These methods are not really automatic.
+
+@code{amake} detects files-accessed and programs-executed
+dependencies via the shared-library @code{libaccess}.
+@code{libaccess} contains wrapper functions for the C
+standard library functions that access or execute
+files. Indirectly, the wrappers inform @code{amake} of each
+file access or execution.
+
+Automatic-dependency analysis can lead to
+surprises. Perhaps, the biggest surprise is that the
+automatic makefile variables @code{^} and @code{<} can
+evaluate to filenames that do not occur in the makefile. The
+@code{filter} and @code{filter-out} functions can help solve
+these problems.
+
+The difference between a command-executed dependency and a
+program-executed dependency is that the command may be a
+complex sequence of shell builtins interspersed with regular
+program executions. A command is a character string. A
+program is a version of a file (i.e., with a timestamp or
+checksum).
+
+@cindex @code{.cmd} files
+
+@code{amake} records a target's commands-executed, and
+environment-variable-value dependencies in a @code{.cmd}
+file, which is an executable shell script. Its name is the
+target's name, with a @code{.cmd} suffix. You can execute
+the script to update the target.
+
+The file also contains comments identifying the name and
+line number of the makefile containing the rule containing
+the commands, and a checksum of the commands themselves.
+The makefile location is very valuable for debugging
+makefiles.
+
+@vindex @code{ACCESS_ANYCMD}
+
+The content of a @code{.cmd} file can be ignored by setting
+the @code{ACCESS_CMD} makefile variable. This is useful when
+a target can be built in more than one way. A better
+solution is to change the makefile to build each target in
+only one way.
+
+If you use @code{ACCESS_ANYCMD}, no @code{.cmd} file is
+written, no commands-executed checksum is computed, and the
+target, and all of its built dependencies, will @emph{not}
+be cached.
+
+@cindex Linux kernel
+
+The @code{ACCESS_CMD} variable is useful, for example, when
+porting the Linux-kernel's build process from @code{make} to
+@code{amake}. By design, its top-level makefiles build a
+target in a subdirectory by changing to that subdirectory
+and re-executing @code{make}. Its sub-level makefiles build
+the same target by, typically, executing the compiler.The
+@code{ACCESS_CMD} variable prevents @code{amake} from always
+rebuilding such a target.
+
+@cindex @code{.dep} files
+
+@code{amake} records a target's files-accessed,
+programs-executed, and shared-libraries-opened dependencies
+in a @code{.dep} file, which is a simple makefile. Its name
+is the target's name, with a @code{.dep} suffix.
+
+A @code{.dep} file can also contain makefile-variable
+definitions that record the checksum and/or
+last-modification time of each dependency.
+
+@cindex @code{.sib} files
+
+A sibling is a file that is created, as a side effect, while
+creating a target. More precisely, a @emph{sibling} is a
+file/directory that is accessed and changed between the time
+@code{amake} begins executing a target's commands and when
+@code{amake} is done updating the target. The names of a
+target's siblings are stored in its @code{.sib} file, the
+name of which is the target's name, with a @code{.sib}
+suffix.
+
+If the target cache is enabled, siblings are cached, along
+with targets.
+
+@cindex @code{amake} example
+
+Here's an example makefile:
+
+@example
+@group
+SHELL=/bin/bash
+ACCESS_ENABLE:=1
+
+foo:
+        wc /etc/hosts > $@
+
+sinclude *.dep
+@end group
+@end example
+
+This is the resulting @code{foo.dep}:
+
+@example
+@group
+foo: /etc/hosts
+foo: /usr/bin/wc
+@end group
+@end example
+
+This is the resulting @code{foo.cmd}:
+
+@example
+@group
+#!/bin/bash
+
+cmdsum=7ca1272c289908a4da1eb6825ca18746aac841d1
+
+# GNUmakefile:5
+export PATH=/usr/src/amake/bin:/usr/bin:/bin
+export LD_LIBRARY_PATH=/usr/src/amake/lib32:/usr/src/amake/lib64
+wc /etc/hosts > foo
+@end group
+@end example
+
+@node Makefile Variables, Debugging, Operation, Amake Features
+@section Makefile Variables
+@cindex @code{amake} makefile variables
+
+The default behavior of @code{amake} can be overridden by
+assigning values to makefile variables. Of course, they can
+be target-specific assignments.
+
+A variable is considered to be ``set'' if and only if it has
+a value and that value is not of length zero. In other
+words, this does not ``set'' variable @code{FOO}:
+
+@example
+@group
+FOO:=
+@end group
+@end example
+
+but this does:
+
+@example
+@group
+FOO:=1
+@end group
+@end example
+
+These are the variables:
+
+@vindex @code{ACCESS_ANYCMD}
+@vindex @code{ACCESS_DIR}
+@vindex @code{ACCESS_CEXT}
+@vindex @code{ACCESS_DEXT}
+@vindex @code{ACCESS_SEXT}
+@vindex @code{ACCESS_FAIL}
+@vindex @code{ACCESS_PASS}
+@vindex @code{ACCESS_ARCH}
+@vindex @code{ACCESS_CACHE}
+@vindex @code{ACCESS_CACHE_DAEMON}
+@vindex @code{ACCESS_CACHE_DBMGR}
+@vindex @code{ACCESS_CACHE_DIR}
+@vindex @code{ACCESS_CACHE_TIMEOUT}
+@vindex @code{ACCESS_CACHE_TRIES}
+@vindex @code{ACCESS_CHKSUM}
+@vindex @code{ACCESS_LMTIME}
+@vindex @code{ACCESS_ENVVARS}
+@vindex @code{ACCESS_PROGRAM}
+@vindex @code{ACCESS_LIBRARY}
+@vindex @code{ACCESS_SHLIBS}
+@vindex @code{ACCESS_LDD}
+@vindex @code{ACCESS_DEBUG}
+
+@itemize
+@item
+@code{ACCESS_ANYCMD}: If set, @code{.cmd} file content is
+    ignored.
+@item
+@code{ACCESS_DIR}: This specifies a directory for dependency
+    files.
+@item
+@code{ACCESS_CEXT}: This overrides the extension for
+    @code{.cmd} files. Overriding extensions with
+    @code{ACCESS_CEXT}, @code{ACCESS_DEXT},
+    @code{ACCESS_SEXT} can be useful with rules like:
+@example
+@group
+    .../vmlinux:
+        $(MAKE) -f ../... ... $@@
+@end group
+@end example
+    where there will be two @code{amake} processes
+    concurrently writing to the same files. Different
+    extensions cause the processes to write to different
+    files.
+@item
+@code{ACCESS_DEXT}: This overrides the extension for
+    @code{.dep} files.
+@item
+@code{ACCESS_SEXT}: This overrides the extension for
+    @code{.sib} files.
+@item
+@code{ACCESS_FAIL}: This is a pattern for filtering-out
+    files-accessed dependencies.
+@item
+@code{ACCESS_PASS}: This is a pattern for filtering
+    files-accessed dependencies.
+@item
+@code{ACCESS_ARCH}: This overrides the computed host
+    architecture.
+@item
+@code{ACCESS_CACHE}: This enables the target cache.  If set,
+    targets are checksummed regardless of the value of
+    @code{ACCESS_CHKSUM}.
+@item
+@code{ACCESS_CACHE_DAEMON}: This overrides the name of the
+    target-cache daemon.
+@item
+@code{ACCESS_CACHE_DBMGR}: This overrides the name of the
+    target-cache index daemon. Choices are @code{myd} and
+    @code{tid}.
+@item
+@code{ACCESS_CACHE_DIR}: This overrides the name of the
+    target-cache directory.
+@item
+@code{ACCESS_CACHE_TIMEOUT}: This integer overrides the
+    number of seconds the target-cache daemon will idle before
+    exiting.
+@item
+@code{ACCESS_CACHE_TRIES}: This integer overrides the
+    number of times to loop while trying to connect to a newly
+    executed target-cache daemon. Each unsuccessful connection
+    is followed by a one-second sleep.
+@item
+@code{ACCESS_CHKSUM}: This enables checksum comparison of
+    dependencies, regardless of the value of
+    @code{ACCESS_CACHE}.  For a cache-get operation,
+    checksum comparison of dependencies is used to analyze
+    a candidate.
+@item
+@code{ACCESS_LMTIME}: This enables last-modification-time
+    comparison of dependencies, regardless of the value of
+    @code{ACCESS_CACHE}.  For a cache-get operation,
+    last-modification-time comparison of dependencies is
+    used to analyze a candidate. Time comparison is for
+    exact equality, not the usual older/newer than.
+@item
+@code{ACCESS_ENVVARS}: This is a space-separated list of
+    environment variables to put in @code{.cmd} files.
+@item
+@code{ACCESS_PROGRAM}: This overrides the name of the
+collect script.
+@item
+@code{ACCESS_LIBRARY}: This overrides the name of wrapper
+    library.
+@item
+@code{ACCESS_SHLIBS}: This enables shared-libraries-opened
+    dependency analysis.
+@item
+@code{ACCESS_LDD}: This overrides the name of the program to
+    print shared-library dependencies.
+@item
+@code{ACCESS_DEBUG}: This enables verbose debugging messages
+    from the @code{libaccess} wrappers.
+@end itemize
+
+@node Debugging, Execution Architecture, Makefile Variables, Amake Features
+@section Debugging
+@cindex @code{amake} debugging
+@cindex @code{--debug}
+@vindex @code{ACCESS_DEBUG}
+
+Extensive @code{amake} debugging messages are enabled with
+the @code{--debug} option, as usual.
+
+If target caching is enabled, the @code{amake}
+@code{--debug} option also enables @code{tcd} debugging,
+which is written to @code{tcd.err} files in the current
+directory.
+
+The environment variable @code{ACCESS_DEBUG} enables verbose
+debugging messages from the @code{libaccess} wrappers. The
+makefile variable of the same name is automatically
+exported.
+
+@node Execution Architecture, Implementation, Debugging, Amake Features
+@section Execution Architecture
+@cindex @code{amake} execution architecture
+
+An @code{amake} system may encompass multiple @code{amake}
+processes executing for multiple users on multiple
+computers.
+
+If target caching is enabled, multiple @code{tcd} processes
+may be executing on multiple computers. They are started as
+needed, and exit when idle. In contrast, a single long-lived
+@code{tid}/@code{sqld} must be executing.
+
+The components of a executing @code{amake} system are shown
+in this picture:
+
+@image{amake-arch,5.4in}
+
+Legend:
+@itemize
+@item
+A solid oval denotes a process.
+@item
+A rectangle denotes a file, or set of files of a particular
+type. Files are grouped into filesystems, which may or may
+not correspond to operating-system filesystems.
+@item
+Paired ovals or rectangles denote multiplicity.
+@item
+n solid arc between processes denotes a @code{fork} and an
+@code{exec}.
+@item
+A solid arc from a process to a file denotes reading and/or
+writing.
+@item
+A dotted arc between processes denotes reading and/or
+writing through a socket.
+@item
+A dotted oval denotes a shared library.
+@item
+A solid arc from a process to a shared library denotes
+calling an input/output function.
+@item
+A dotted arc between a shared library and a process denotes
+writing through a pipe.
+@end itemize
+
+In the picture, the multiple @code{amake} processes indicate
+that at least one user has started @code{amake} from a
+shell. Of course, an @code{amake} process can start other
+@code{amake} processes, via a rule's commands.
+
+In deciding whether a target must be updated, @code{amake}
+reads the target's @code{.cmd} and @code{.dep} files,
+writing a new @code{.cmd} file as needed. These files are
+assumed to be in a normal user-private workspace.
+
+If a target must be updated, @code{amake} starts an
+@code{amake-collect} process for the target and executes the
+its rule's commands. The commands call wrapper functions in
+the @code{libaccess} shared-library, which write the
+target's dependency data to its @code{amake-collect}
+process, via an anonymous pipe.  @code{amake-collect} reads
+the target's dependency data from the pipe and writes the
+target's @code{.dep} and @code{.sib} files. As usual, the
+commands update the target file in the workspace filesystem.
+
+If the target cache is enabled, the @code{tid}/@code{sqld}
+and cache filesystem are assumed to be available. The cache
+filesystem can be shared among workspaces on a single host,
+or shared among hosts (via NFS, for example). Files are
+stored in the cache filesystem below directories whose names
+prevent collisions. The database filesystem holds metadata
+about those files (e.g., names and checksums).
+
+If the target cache is enabled, @code{amake} consults the
+target-cache subsystem, prior to, and perhaps instead of,
+executing a rule's commands. If needed, a @code{tcd} process
+is started. Each @code{amake} process has a single
+@code{tcd} process, with which it communicates via a named
+socket. @code{tcd} searches the cache for a suitable target,
+by querying the @code{tid}/@code{sqld} and analyzing
+candidates in the cache filesystem. If successful, files are
+hard-linked or copied to the workspace filesystem. If
+unsuccessful, the rule's commands are executed as usual, the
+updated target's metadata is stored by the
+@code{tid}/@code{sqld}, and the updated target's files are
+hard-linked or copied to the cache filesystem.  A target's
+siblings are also stored in the cache filesystem.
+
+@node Implementation, Amake-Collect, Execution Architecture, Amake Features
+@section Implementation
+@cindex @code{amake} implementation
+
+The features of @code{amake} are implemented by changing
+@code{make} in several places:
+
+@enumerate
+@item
+@cindex @code{.cmd} files
+@vindex @code{ACCESS_ANYCMD}
+As the processing of a target begins, the
+@code{access_commands} function computes the checksum of the
+commands to execute and the required environment-variable
+assignments (or @code{unset} commands). This checksum is
+compared to that stored in an existing @code{.cmd} file. If
+they differ, and the @code{ACCESS_ANYCMD} makefile variable
+is not set, a new @code{.cmd} file is written, and the
+target is updated.  The file's name is the target's name,
+with @code{.cmd} appended.
+@item
+@cindex @code{amake} checksum
+@cindex @code{amake} last-modification-time
+@vindex @code{ACCESS_CHKSUM}
+@vindex @code{ACCESS_LMTIME}
+If a target update is not triggered due to different
+commands, the @code{access_mustmake} function determines
+whether the target must be updated due to a dependency's
+checksum or last-modification-time, using exact
+equality. The relevant variables are @code{ACCESS_CHKSUM}
+and @code{ACCESS_LMTIME}. Otherwise, the usual @code{make}
+older-than/newer-than relative comparison is used.
+@item
+@cindex @code{amake} cache
+@vindex @code{ACCESS_CACHE}
+Just before updating a target, if the target cache is
+enabled, the @code{access_cache} function searches the cache
+for a suitable target. If one is found, it is retrieved and
+the update is complete.
+@item
+@cindex @code{amake-collect}
+@cindex @code{.dep} files
+@cindex @code{.sib} files
+As the updating of a target begins, The @code{access_open}
+function creates an anonymous pipe and a pipe-arbitrating
+semaphore for communication with a script named
+@code{amake-collect}. It then calls @code{fork} and
+@code{exec} to execute the script. @code{amake-collect} is
+described in @ref{Amake-Collect}, but its purpose is to
+create the target's @code{.dep} and @code{.sib} files.
+@item
+@cindex @code{amake-collect}
+@vindex @code{LD_PRELOAD}
+@cindex @code{amake} semaphores
+Before the execution of a command in the sequence of
+commands that update a target, the @code{access_child}
+function sets two environment variables, to influence the
+command's execution. The first is @code{LD_PRELOAD}, so the
+@code{libaccess} wrappers are executed. The second variable
+is set to a sequence of pipe-descriptor/semaphore-identifier
+pairs. This allows a wrapper to write programs-executed and
+files-accessed dependencies to one or more instances of
+@code{amake-collect}, through that many pipes.  Recursive
+make execution and parallel building require multiple
+processes to write to the same pipe, even though there is
+exactly one reader process for a particular pipe.  SVR4
+semaphores allow writer processes to synchronize pipe
+access.
+@item
+@cindex @code{amake-collect}
+@cindex @code{amake} semaphores
+@cindex @code{amake} cache
+@vindex @code{ACCESS_CACHE}
+After the execution of the last command to update a target,
+the @code{access_close} function closes the last open pipe
+descriptor, allowing @code{amake-collect} to detect an
+end-of-file condition on its pipe. It also removes the
+pipe's semaphore and waits for @code{amake-collect} to
+exit. Finally, if the target cache is enabled, the updated
+target is put in the cache.
+@end enumerate
+
+@cindex @code{.PHONY}
+Since a phony target (i.e., a dependency of @code{.PHONY})
+is, by definition, never up to date:
+@itemize
+A @code{.cmd} file is not created, because command
+dependencies do not need to be checked.
+@item
+An @code{amake-collect} subprocess is never started, so a
+@code{.dep} file is not created, because file dependencies
+do not need to be checked.
+@item
+The target is never cached, even if updating it creates a
+file with the same name and/or it has siblings.
+@end itemize
+
+@node Amake-Collect, Target-Cache Subsystem, Implementation, Amake Features 
+@section Amake-Collect
+@cindex @code{amake-collect}
+
+Although the distributed version of @code{amake-collect} can
+be used as it is, the script is intended to be customized
+for a particular build process.
+
+@cindex @code{.dep} file
+@cindex @code{.sib} file
+@cindex @code{amake} semaphores
+
+The script reads dependencies from @code{stdin} (a pipe),
+canonicalizes and filters the paths, and writes them to the
+target's @code{.dep} and @code{.sib} files. Checksum and
+last-modification-time values for dependencies are also
+written to the target's @code{.dep} file, as
+makefile-variable definitions.  If the resulting files are
+empty they are removed, as unneeded.
+
+The pipe-arbitrating semaphore is removed upon normal
+termination or receipt of a signal.
+
+@node Target-Cache Subsystem, , Amake-Collect, Amake Features 
+@section Target-Cache Subsystem
+@cindex target-cache subsystem
+
+The target-cache subsystem provides another kind of build
+avoidance. If a target must be updated, and some user, on
+this host or some other host, has previously built a similar
+target, the latter is a candidate for updating the former.
+
+If the target cache is enabled, each @code{amake} process
+starts a @code{tcd} process, which exits when its
+idle-timeout occurs. Thus, multiple @code{tcd} processes may
+be executing on multiple computers. They communicate with a
+single long-lived @code{tid}/@code{sqld} process, which is
+probably started by some computer's @code{rc} sequence. They
+also access the target-cache filesystem, which is probably
+NFS-mounted during each computer's @code{rc} sequence. In
+any event, the @code{tid}/@code{sqld} is assumed to be
+listening for connections from @code{tcd} processes, and the
+cache filesystem is assumed to be accessible by @code{tcd}
+processes. The @code{tid}/@code{sqld} does not access the
+cache filesystem directly.
+
+The @code{sqld} process manages an SQL database, which
+contains target metadata. The database is named
+@code{tcd}. It contains two tables, named @code{entries} and
+@code{log}. These are the schemas:
+
+@example
+@group
+create database tcd;
+use tcd;
+@end group
+@group
+create table entries (
+    date     varchar(20),
+    name     text,
+    arch     varchar(60),
+    chksum   varchar(40),
+    cmdsum   varchar(40),
+    cachedir text
+);
+@end group
+@group
+create table log (
+    op       varchar(8),
+    date     varchar(20),
+    host     varchar(80),
+    user     varchar(20),
+    name     text,
+    cwd      text,
+    result   varchar(7)
+);
+@end group
+@end example
+
+The @code{tid} process manages a GDBM database, which
+contains target metadata. The database is named
+@code{/tmp/db}. A key comprises at least a target's name,
+architecture, and commands-executed checksum. The important
+data is the target's cache directory.
+
+The cache filesystem, below @code{/tmp/tcd}, holds cached
+files.  They are stored below deeper directories whose names
+prevent collisions. Directory names are constructed from:
+user name, host name, date, process number, and time.
+
+Prior to rebuilding a target, an @code{amake} process's
+@code{tcd} process forks yet another process, to search the
+cache for a suitable target, by querying @code{sqld} and
+analyzing candidates in the cache filesystem. If successful,
+files are hard-linked or copied to the workspace
+filesystem. If unsuccessful, the rule's commands are
+executed as usual, the updated target's metadata is stored
+by @code{sqld}, and the updated target's files are
+hard-linked or copied to the cache filesystem.  A target's
+siblings, if any, are also stored in the cache filesystem.

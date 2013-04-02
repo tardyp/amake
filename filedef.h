@@ -26,6 +26,16 @@ this program.  If not, see <http://www.gnu.org/licenses/>.  */
 struct file
   {
     const char *name;
+
+    /* Fortunately, this struct is bzero()-ed by enter_file(). */
+    int access_pd;	        /* libaccess pipe descriptor (write) */
+    int access_ppid;		/* pid of pipe reader */
+    int access_sd;	        /* libaccess semaphore descriptor */
+    int access_spid;		/* pid of semaphore creator */
+    char *access_sum;		/* chksum of file content */
+    char *access_tom;		/* time-of-(last)-modification */
+    char *access_cmdsum;	/* chksum of .cmd file content */
+
     const char *hname;          /* Hashed filename */
     const char *vpath;          /* VPATH/vpath pathname */
     struct dep *deps;		/* all dependencies, including duplicates */

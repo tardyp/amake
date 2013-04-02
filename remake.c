@@ -24,6 +24,8 @@ this program.  If not, see <http://www.gnu.org/licenses/>.  */
 #include "variable.h"
 #include "debug.h"
 
+#include "access.h"
+
 #include <assert.h>
 
 #ifdef HAVE_FCNTL_H
@@ -770,6 +772,8 @@ update_file_1 (struct file *file, unsigned int depth)
       DBF (DB_VERBOSE, _("Making `%s' due to always-make flag.\n"));
     }
 
+  access_commands(file,&must_make);
+
   if (!must_make)
     {
       if (ISDB (DB_VERBOSE))
@@ -1002,7 +1006,7 @@ check_dep (struct file *file, unsigned int depth,
       check_renamed (file);
       mtime = file_mtime (file);
       check_renamed (file);
-      if (mtime == NONEXISTENT_MTIME || mtime > this_mtime)
+      if (access_mustmake(mtime==NONEXISTENT_MTIME || mtime>this_mtime,file))
 	*must_make_ptr = 1;
     }
   else
@@ -1028,10 +1032,10 @@ check_dep (struct file *file, unsigned int depth,
       check_renamed (file);
       mtime = file_mtime (file);
       check_renamed (file);
-      if (mtime != NONEXISTENT_MTIME && mtime > this_mtime)
+      if (access_mustmake(mtime!=NONEXISTENT_MTIME && mtime>this_mtime,file))
+	*must_make_ptr = 1;
         /* If the intermediate file actually exists and is newer, then we
            should remake from it.  */
-	*must_make_ptr = 1;
       else
 	{
           /* Otherwise, update all non-intermediate files we depend on, if
@@ -1186,6 +1190,8 @@ remake_file (struct file *file)
       /* The normal case: start some commands.  */
       if (!touch_flag || file->cmds->any_recurse)
 	{
+	  if (access_cache(file))
+	    return;
 	  execute_file_commands (file);
 	  return;
 	}

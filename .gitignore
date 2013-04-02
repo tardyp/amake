@@ -1,0 +1,16 @@
+autom4te.cache/
+build.sh
+config.h
+config.log
+config.status
+config/Makefile
+glob/Makefile
+make
+po/Makefile
+po/Makefile.in
+po/POTFILES
+stamp-h1
+Makefile
+.deps
+*.o
+*~
