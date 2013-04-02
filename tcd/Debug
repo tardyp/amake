@@ -1,0 +1,5 @@
+#!/bin/bash
+
+SocketFileName=tcd.0
+
+hose -unix- $SocketFileName --unix --slave
